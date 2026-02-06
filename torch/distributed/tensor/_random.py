@@ -393,6 +393,36 @@ class OffsetBasedRNGTracker(_RNGStateTracker):
         numel = (numel + 3) // 4 * 4
         state.offset = old_offset + numel
 
+    def _compute_start_end_rng_states(
+        self, spec: DTensorSpec
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Compute the start and end RNG states for distributed random ops.
+
+        This method computes both states upfront so they can be passed to a
+        higher-order operator like run_with_start_end_rng_state.
+
+        Returns:
+            A tuple of (start_state, end_state) tensors:
+            - start_state: RNG state with offset adjusted for this rank's shard
+            - end_state: RNG state with offset advanced by full DTensor size
+        """
+        from torch.distributed.tensor._ops.utils import prod
+
+        current_state = self._get_device_state()
+
+        # Compute start state with pre-op offset
+        start_philox = _PhiloxState(current_state.clone())
+        old_offset = start_philox.offset
+        self._set_pre_op_offset(start_philox, spec)
+
+        # Compute end state with post-op offset
+        end_philox = _PhiloxState(current_state.clone())
+        dtensor_numel = prod(spec.shape)
+        dtensor_numel = (dtensor_numel + 3) // 4 * 4
+        end_philox.offset = old_offset + dtensor_numel
+
+        return start_philox.state, end_philox.state
+
     def _calc_shard_linear_idx(
         self, shard_coord: list[int], shard_size: list[int]
     ) -> int:
