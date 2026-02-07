@@ -1405,7 +1405,13 @@ void initJITBindings(PyObject* module) {
 
   py::class_<PyTorchStreamWriter>(m, "PyTorchFileWriter")
       .def(
-          py::init<std::string, bool, uint64_t>(),
+          py::init([](const std::string& file_name,
+                      bool compute_crc32 = true,
+                      uint64_t storage_alignment = 64) {
+            py::gil_scoped_release release;
+            return std::make_unique<PyTorchStreamWriter>(
+              file_name, compute_crc32, storage_alignment);
+          }),
           py::arg("file_name"),
           py::arg("compute_crc32") = true,
           py::arg("storage_alignment") = 64)
@@ -1458,6 +1464,7 @@ void initJITBindings(PyObject* module) {
       .def(
           "write_record_metadata",
           [](PyTorchStreamWriter& self, const std::string& name, size_t size) {
+            py::gil_scoped_release release;
             return self.writeRecord(name, nullptr, size);
           })
       .def(
@@ -1466,9 +1473,12 @@ void initJITBindings(PyObject* module) {
              const std::string& name,
              const char* data,
              size_t size) {
-            // Since we don't know where the data come from, we cannot
-            // release the GIL in this overload
-            return self.writeRecord(name, data, size);
+            std::string owned;
+            if (size != 0) {
+              owned.assign(data, size);
+            }
+            py::gil_scoped_release release;
+            return self.writeRecord(name, owned.data(), owned.size());
           })
       .def(
           "write_record",
@@ -1507,7 +1517,10 @@ void initJITBindings(PyObject* module) {
             return self.writeRecord(
                 name, reinterpret_cast<const char*>(data), size);
           })
-      .def("write_end_of_file", &PyTorchStreamWriter::writeEndOfFile)
+      .def("write_end_of_file", [](PyTorchStreamWriter& self) {
+        py::gil_scoped_release release;
+        return self.writeEndOfFile();
+      })
       .def("set_min_version", &PyTorchStreamWriter::setMinVersion)
       .def("archive_name", &PyTorchStreamWriter::archiveName)
       .def("serialization_id", &PyTorchStreamWriter::serializationId)
